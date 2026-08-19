@@ -140,26 +140,44 @@ eventual success, maximum attempts, a non-retryable error, and jitter.
 
 ## Final time record and reflection
 
-**Planned duration:** 3 hours  
-**Actual duration:**  
-**Reason for the difference:**
+**Planned duration:** 3 hours
 
-**Working features:**
+**Actual duration:** 3 hours
 
-**Incomplete or broken features:**
+**Reason for the difference:** The task was completed within the planned time.
 
-**Most difficult blocker:**
+**Working features:** The prototype retries temporary inventory failures, uses
+exponential backoff with jitter, stops at a maximum number of attempts, allows
+permanent errors to fail immediately, and demonstrates both success and
+failure outcomes. All four automated tests pass.
 
-**How I diagnosed it:**
+**Incomplete or broken features:** No known broken features within the defined
+mini-prototype scope.
 
-**What I initially misunderstood:**
+**Most difficult blocker:** Understanding jitter and how it changes an
+exponential-backoff delay was the most difficult part.
 
-**What I learned:**
+**How I diagnosed it:** I compared repeated program runs and noticed that the
+delays increased but were not exactly the same each time. Research showed that
+the random difference is intentional and prevents multiple clients from
+retrying simultaneously.
 
-**What I would try next with more time:**
+**What I initially misunderstood:** I initially thought retry and backoff was
+the same as trial and error and assumed it would directly check which products
+were in stock. I now understand that it is an error-handling strategy for
+temporary failures during operations such as communication with an inventory
+service.
+
+**What I learned:** I learned how to retry only temporary failures, double and
+cap the waiting time, add jitter, enforce a maximum number of attempts, and
+avoid retrying permanent errors.
+
+**What I would try next with more time:** I would integrate the retry function
+around a real warehouse API request so I can understand exactly where retry
+and backoff should be placed in a complete project.
 
 **Confidence before:** 2/10  
-**Confidence after:** _/10
+**Confidence after:** 9/10
 
 ## Audit links
 
