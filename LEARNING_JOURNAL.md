@@ -72,12 +72,16 @@ after finishing.
 |---|---|---|---|---|---|
 | _Enter time_ | Define the prototype | Wrote the scope and Definition of Done | Scope completed | The prototype must remain small and demonstrable | Begin independent research |
 | _Enter time_ | Understand retry and backoff | Reviewed the basic meaning and an exponential-delay example | My original assumption was incomplete | Retry repeats a failed operation, while backoff increases the waiting time between attempts | Research reliable sources and record them below |
+| 19/08/2026, 11:30 AM | Research retry behaviour | Read guidance from AWS and Google Cloud about backoff, retryable errors, jitter, and idempotency | I understood the four research topics and corrected my original assumption | Retry/backoff handles temporary failures; it does not check stock itself, but can make inventory communication more reliable | Build a small Python demonstration |
 
 ## Research log
 
 | Date and time | Source and link | Reason for using it | Main lesson |
 |---|---|---|---|
-|  |  |  |  |
+| 19/08/2026, 11:30 AM | [AWS: Control and limit retry calls](https://docs.aws.amazon.com/wellarchitected/2023-04-10/framework/rel_mitigate_interaction_failure_limit_retries.html) | Understand retry and exponential backoff | Retry repeats a temporarily failed operation. Exponential backoff increases the delay between attempts, and retry limits prevent infinite attempts. |
+| 19/08/2026, 11:30 AM | [Google Cloud: Retry strategy](https://docs.cloud.google.com/storage/docs/retry-strategy) | Learn which failures should be retried | Temporary network, timeout, rate-limit, and server failures can be retried. Invalid requests and authorization failures normally require correction rather than retries. |
+| 19/08/2026, 11:30 AM | [AWS: Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) | Understand jitter | Jitter adds randomness to retry delays so that many clients do not retry simultaneously and overload the service again. |
+| 19/08/2026, 11:30 AM | [AWS: Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/) | Understand the risks of repeating operations | A retried operation should be idempotent or protected against duplicates so repeated attempts do not accidentally perform an action more than once. |
 
 ## Blocker records
 
