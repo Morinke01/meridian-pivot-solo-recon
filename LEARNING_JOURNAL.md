@@ -74,6 +74,7 @@ after finishing.
 | _Enter time_ | Understand retry and backoff | Reviewed the basic meaning and an exponential-delay example | My original assumption was incomplete | Retry repeats a failed operation, while backoff increases the waiting time between attempts | Research reliable sources and record them below |
 | 19/08/2026, 11:30 AM | Research retry behaviour | Read guidance from AWS and Google Cloud about backoff, retryable errors, jitter, and idempotency | I understood the four research topics and corrected my original assumption | Retry/backoff handles temporary failures; it does not check stock itself, but can make inventory communication more reliable | Build a small Python demonstration |
 | 19/08/2026, 11:32 AM | Build and test the mini-prototype | Implemented two inventory scenarios and four automated tests | The success scenario completed after temporary failures, the permanent-failure scenario stopped at the configured limit, and all four tests passed | A retry policy should retry only temporary errors, increase and cap delays, add jitter, and enforce a maximum number of attempts | Review the implementation and preserve evidence in Git |
+| 19/08/2026, 11:43 AM | Verify the prototype manually | Ran the success scenario, failure scenario, and full test suite in the VS Code terminal | Success occurred on attempt 3, permanent failure stopped on attempt 4, and all 4 tests passed in 0.003 seconds | The random jitter makes each displayed delay slightly different while the exponential part continues to increase | Complete the time record and final reflection |
 
 ## Research log
 
@@ -112,7 +113,9 @@ increasing delays, and succeeds on the third attempt.
 **Actual result:** The operation succeeded on attempt 3 and reported that the
 Northstar Jacket had 8 units.
 
-**Evidence:** Automated tests and terminal output produced on 19/08/2026.
+**Evidence:** Manually verified in the VS Code terminal on 19/08/2026 at
+11:43 AM. The operation waited 0.27 and 0.53 seconds before succeeding on
+attempt 3.
 
 ### Permanent-failure case
 
@@ -124,14 +127,16 @@ after the fourth attempt.
 **Actual result:** The operation stopped after 4 attempts and reported that the
 inventory update could not be completed.
 
-**Evidence:** Automated tests and terminal output produced on 19/08/2026.
+**Evidence:** Manually verified in the VS Code terminal on 19/08/2026 at
+11:43 AM. The operation waited 0.32, 0.57, and 1.04 seconds before stopping
+after attempt 4.
 
 ### Automated regression check
 
 **Command used:** `python3 -m unittest -v`
 
-**Actual result:** All 4 tests passed. The tests covered eventual success,
-maximum attempts, a non-retryable error, and jitter.
+**Actual result:** All 4 tests passed in 0.003 seconds. The tests covered
+eventual success, maximum attempts, a non-retryable error, and jitter.
 
 ## Final time record and reflection
 
