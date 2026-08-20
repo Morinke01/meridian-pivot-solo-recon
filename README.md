@@ -2,14 +2,17 @@
 
 Morinke Julius's Week 2 Solo Recon and inventory synchronization deliverable.
 
-## Day 3 architecture
+## Day 4 architecture
 
 ```text
-Mock warehouse API
+Warehouse inventory event
         |
-        | polled every 300 seconds
+        | signed HTTP POST
         v
-Warehouse client with retry/backoff
+Signature and payload verification
+        |
+        v
+Duplicate-event check
         |
         v
 Thread-safe inventory cache
@@ -18,50 +21,53 @@ Thread-safe inventory cache
 Stock query HTTP endpoint
 ```
 
-The production polling interval defaults to five minutes. A shorter interval
-can be supplied while demonstrating the service.
+The Day 3 poller, warehouse client, and mock polling API were removed from the
+active branch. Their code and evidence remain available on
+`day3/polling-inventory-service` and in `DAY3_BUILD_LOG.md`.
 
-## Run the Day 3 service
+## Run the Day 4 service
 
 Open two terminals in the repository.
 
-Terminal 1 starts the simulated warehouse:
+Terminal 1 configures a demonstration secret and starts the receiver:
 
 ```bash
-python3 mock_warehouse.py
-```
-
-Terminal 2 starts the inventory service:
-
-```bash
+export NORTHSTAR_WEBHOOK_SECRET=demo-secret
 python3 run_service.py
 ```
 
-For a faster demonstration that polls every second:
+Terminal 2 uses the same secret to send a signed warehouse event:
 
 ```bash
-python3 run_service.py --poll-interval 1
+export NORTHSTAR_WEBHOOK_SECRET=demo-secret
+python3 send_webhook.py --event-id demo-001 --quantity 11
 ```
 
-Query an in-stock product:
+Send the same command again to demonstrate duplicate-event protection. The
+first delivery returns `processed: true`; the repeated delivery returns
+`duplicate: true`.
+
+Query the updated stock:
 
 ```bash
 curl "http://127.0.0.1:8080/inventory?sku=NS-JACKET-M-BLK"
 ```
 
-Query an out-of-stock product:
-
-```bash
-curl "http://127.0.0.1:8080/inventory?sku=NS-TEE-L-WHT"
-```
-
-Check synchronization health:
+Check that the active synchronization mode is webhook:
 
 ```bash
 curl "http://127.0.0.1:8080/health"
 ```
 
-Stop each service with `Ctrl+C`.
+Send an event using a different secret to demonstrate signature rejection:
+
+```bash
+NORTHSTAR_WEBHOOK_SECRET=wrong-secret \
+  python3 send_webhook.py --event-id forged-001 --quantity 99
+```
+
+The forged event receives HTTP `401` and does not change the cache. Stop the
+service with `Ctrl+C`.
 
 ## Run all tests
 
@@ -69,19 +75,22 @@ Stop each service with `Ctrl+C`.
 python3 -m unittest -v
 ```
 
-The test suite covers warehouse retrieval, polling, cache updates, stock
-queries, missing input, retry limits, non-retryable errors, and jitter.
+The test suite covers signed events, invalid signatures, payload validation,
+duplicate protection, cache updates, stock-query regressions, and the original
+Solo Recon retry behavior.
 
-## Day 3 files
+## Day 4 files
 
-- `inventory_service/warehouse.py` retrieves and validates warehouse data.
-- `inventory_service/poller.py` schedules synchronization every five minutes.
 - `inventory_service/cache.py` stores the latest inventory snapshot safely.
-- `inventory_service/api.py` exposes health and stock-query endpoints.
-- `mock_warehouse.py` provides a reproducible local warehouse API.
-- `run_service.py` starts the poller and public query service.
-- `test_inventory_service.py` tests the complete Day 3 design.
-- `DAY3_BUILD_LOG.md` records requirements, tasks, decisions and evidence.
+- `inventory_service/webhook.py` verifies signatures, validates events, and
+  blocks duplicate processing.
+- `inventory_service/api.py` exposes the webhook, health, and stock-query
+  endpoints.
+- `send_webhook.py` creates signed demonstration events.
+- `run_service.py` starts the webhook and stock-query service.
+- `test_inventory_service.py` verifies the pivot and regression behavior.
+- `DAY4_PIVOT_LOG.md` records the forced change and its immediate impact.
+- `DAY3_BUILD_LOG.md` preserves evidence of the superseded polling design.
 
 ## Prototype goal
 

@@ -1,4 +1,4 @@
-"""Tests for the Day 3 polling inventory service."""
+"""Tests for the Day 4 webhook inventory service."""
 
 from __future__ import annotations
 
@@ -6,132 +6,135 @@ import json
 import threading
 import unittest
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from inventory_service.api import create_server
 from inventory_service.cache import InventoryCache
-from inventory_service.poller import InventoryPoller
-from inventory_service.warehouse import WarehouseClient
-from mock_warehouse import WarehouseHandler
+from inventory_service.webhook import WebhookProcessor
 
 
-class FakeWarehouseClient:
-    def __init__(self, products: list[dict]) -> None:
-        self.products = products
-        self.calls = 0
+class WebhookInventoryServiceTests(unittest.TestCase):
+    secret = "test-secret"
 
-    def fetch_inventory(self) -> list[dict]:
-        self.calls += 1
-        return self.products
-
-
-class InventoryServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.products = [
-            {"sku": "NS-JACKET-M-BLK", "name": "Northstar Jacket", "quantity": 8},
-            {"sku": "NS-TEE-L-WHT", "name": "Northstar Tee", "quantity": 0},
-        ]
+        self.cache = InventoryCache()
+        self.processor = WebhookProcessor(self.cache, self.secret)
+        self.server = create_server(self.cache, self.processor, "127.0.0.1", 0)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
 
-    def test_poller_updates_cache_from_warehouse(self):
-        cache = InventoryCache()
-        client = FakeWarehouseClient(self.products)
-        retry_calls = []
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
 
-        def immediate_retry(operation):
-            retry_calls.append("called")
-            return operation()
+    def test_valid_webhook_updates_inventory_cache(self):
+        body = self._event_body(event_id="evt-001", quantity=12)
 
-        poller = InventoryPoller(client, cache, retry_operation=immediate_retry)
+        status, result = self._post_webhook(body, self.processor.expected_signature(body))
 
-        product_count = poller.sync_once()
+        self.assertEqual(status, 202)
+        self.assertTrue(result["processed"])
+        self.assertFalse(result["duplicate"])
+        self.assertEqual(self.cache.get("NS-JACKET-M-BLK")["quantity"], 12)
 
-        self.assertEqual(product_count, 2)
-        self.assertEqual(client.calls, 1)
-        self.assertEqual(retry_calls, ["called"])
-        self.assertEqual(cache.get("NS-JACKET-M-BLK")["quantity"], 8)
-        self.assertIsNotNone(cache.snapshot()["last_synced_at"])
+    def test_invalid_signature_is_rejected_without_cache_update(self):
+        body = self._event_body(event_id="evt-002", quantity=5)
 
-    def test_warehouse_client_reads_mock_api(self):
-        server = self._start_server(WarehouseHandler)
+        with self.assertRaises(HTTPError) as context:
+            self._post_webhook(body, "sha256=invalid")
 
-        try:
-            client = WarehouseClient(
-                f"http://127.0.0.1:{server.server_port}/inventory"
-            )
-            products = client.fetch_inventory()
-        finally:
-            self._stop_server(server)
+        self.assertEqual(context.exception.code, 401)
+        context.exception.close()
+        self.assertIsNone(self.cache.get("NS-JACKET-M-BLK"))
 
-        self.assertEqual(len(products), 3)
-        self.assertEqual(products[0]["sku"], "NS-JACKET-M-BLK")
+    def test_duplicate_event_is_acknowledged_but_not_processed_twice(self):
+        body = self._event_body(event_id="evt-003", quantity=7)
+        signature = self.processor.expected_signature(body)
 
-    def test_query_endpoint_returns_stock_status(self):
-        cache = InventoryCache()
-        cache.replace(self.products)
-        server = create_server(cache, "127.0.0.1", 0)
-        self._serve_in_background(server)
+        first_status, first = self._post_webhook(body, signature)
+        second_status, second = self._post_webhook(body, signature)
 
-        try:
-            url = (
-                f"http://127.0.0.1:{server.server_port}"
-                "/inventory?sku=NS-JACKET-M-BLK"
-            )
-            with urlopen(url) as response:
-                payload = json.load(response)
-        finally:
-            self._stop_server(server)
+        self.assertEqual(first_status, 202)
+        self.assertTrue(first["processed"])
+        self.assertEqual(second_status, 200)
+        self.assertFalse(second["processed"])
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(self.cache.get("NS-JACKET-M-BLK")["quantity"], 7)
+
+    def test_invalid_payload_is_rejected(self):
+        body = json.dumps(
+            {
+                "event_id": "evt-004",
+                "event_type": "inventory.updated",
+                "product": {
+                    "sku": "NS-JACKET-M-BLK",
+                    "name": "Jacket",
+                    "quantity": -1,
+                },
+            }
+        ).encode("utf-8")
+
+        with self.assertRaises(HTTPError) as context:
+            self._post_webhook(body, self.processor.expected_signature(body))
+
+        self.assertEqual(context.exception.code, 422)
+        context.exception.close()
+
+    def test_stock_query_still_reports_in_stock_after_pivot(self):
+        body = self._event_body(event_id="evt-005", quantity=8)
+        self._post_webhook(body, self.processor.expected_signature(body))
+
+        with urlopen(f"{self.base_url}/inventory?sku=NS-JACKET-M-BLK") as response:
+            payload = json.load(response)
 
         self.assertEqual(payload["quantity"], 8)
         self.assertTrue(payload["in_stock"])
+        self.assertIsNotNone(payload["last_synced_at"])
 
-    def test_query_endpoint_reports_out_of_stock(self):
-        cache = InventoryCache()
-        cache.replace(self.products)
-        server = create_server(cache, "127.0.0.1", 0)
-        self._serve_in_background(server)
+    def test_stock_query_still_reports_out_of_stock_after_pivot(self):
+        body = self._event_body(event_id="evt-006", quantity=0)
+        self._post_webhook(body, self.processor.expected_signature(body))
 
-        try:
-            url = (
-                f"http://127.0.0.1:{server.server_port}"
-                "/inventory?sku=NS-TEE-L-WHT"
-            )
-            with urlopen(url) as response:
-                payload = json.load(response)
-        finally:
-            self._stop_server(server)
+        with urlopen(f"{self.base_url}/inventory?sku=NS-JACKET-M-BLK") as response:
+            payload = json.load(response)
 
         self.assertEqual(payload["quantity"], 0)
         self.assertFalse(payload["in_stock"])
 
-    def test_query_endpoint_requires_sku(self):
-        cache = InventoryCache()
-        server = create_server(cache, "127.0.0.1", 0)
-        self._serve_in_background(server)
+    def test_health_endpoint_reports_webhook_mode(self):
+        with urlopen(f"{self.base_url}/health") as response:
+            payload = json.load(response)
 
-        try:
-            with self.assertRaises(HTTPError) as context:
-                urlopen(f"http://127.0.0.1:{server.server_port}/inventory")
-        finally:
-            self._stop_server(server)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["sync_mode"], "webhook")
+        self.assertEqual(payload["product_count"], 0)
 
-        self.assertEqual(context.exception.code, 400)
-        context.exception.close()
+    def _event_body(self, *, event_id: str, quantity: int) -> bytes:
+        return json.dumps(
+            {
+                "event_id": event_id,
+                "event_type": "inventory.updated",
+                "product": {
+                    "sku": "NS-JACKET-M-BLK",
+                    "name": "Northstar Jacket",
+                    "quantity": quantity,
+                },
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
 
-    def _start_server(self, handler):
-        from http.server import ThreadingHTTPServer
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        self._serve_in_background(server)
-        return server
-
-    @staticmethod
-    def _serve_in_background(server) -> None:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-
-    @staticmethod
-    def _stop_server(server) -> None:
-        server.shutdown()
-        server.server_close()
+    def _post_webhook(self, body: bytes, signature: str) -> tuple[int, dict]:
+        request = Request(
+            f"{self.base_url}/webhooks/inventory",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Webhook-Signature": signature,
+            },
+        )
+        with urlopen(request) as response:
+            return response.status, json.load(response)
 
 
 if __name__ == "__main__":
