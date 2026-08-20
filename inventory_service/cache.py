@@ -23,6 +23,15 @@ class InventoryCache:
             self._items = normalized
             self._last_synced_at = synced_at
 
+    def upsert(self, product: dict) -> None:
+        """Insert or replace one product received through a webhook event."""
+
+        synced_at = datetime.now(timezone.utc).isoformat()
+
+        with self._lock:
+            self._items[product["sku"]] = deepcopy(product)
+            self._last_synced_at = synced_at
+
     def get(self, sku: str) -> dict | None:
         with self._lock:
             product = self._items.get(sku)

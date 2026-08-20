@@ -7,9 +7,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .cache import InventoryCache
+from .webhook import InvalidEventError, InvalidSignatureError, WebhookProcessor
 
 
-def create_handler(cache: InventoryCache):
+MAX_WEBHOOK_BYTES = 64 * 1024
+
+
+def create_handler(cache: InventoryCache, webhook_processor: WebhookProcessor):
     class InventoryHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -20,6 +24,7 @@ def create_handler(cache: InventoryCache):
                     200,
                     {
                         "status": "ok",
+                        "sync_mode": "webhook",
                         "product_count": snapshot["product_count"],
                         "last_synced_at": snapshot["last_synced_at"],
                     },
@@ -49,6 +54,38 @@ def create_handler(cache: InventoryCache):
 
             self._send_json(404, {"error": "endpoint not found"})
 
+        def do_POST(self) -> None:
+            if urlparse(self.path).path != "/webhooks/inventory":
+                self._send_json(404, {"error": "endpoint not found"})
+                return
+
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self._send_json(400, {"error": "invalid Content-Length header"})
+                return
+
+            if content_length < 1:
+                self._send_json(400, {"error": "webhook body is required"})
+                return
+            if content_length > MAX_WEBHOOK_BYTES:
+                self._send_json(413, {"error": "webhook body is too large"})
+                return
+
+            body = self.rfile.read(content_length)
+            signature = self.headers.get("X-Webhook-Signature", "")
+
+            try:
+                result = webhook_processor.process(body, signature)
+            except InvalidSignatureError as error:
+                self._send_json(401, {"error": str(error)})
+                return
+            except InvalidEventError as error:
+                self._send_json(422, {"error": str(error)})
+                return
+
+            self._send_json(200 if result["duplicate"] else 202, result)
+
         def _send_json(self, status: int, payload: dict) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
@@ -63,5 +100,12 @@ def create_handler(cache: InventoryCache):
     return InventoryHandler
 
 
-def create_server(cache: InventoryCache, host: str, port: int) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), create_handler(cache))
+def create_server(
+    cache: InventoryCache,
+    webhook_processor: WebhookProcessor,
+    host: str,
+    port: int,
+) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer(
+        (host, port), create_handler(cache, webhook_processor)
+    )

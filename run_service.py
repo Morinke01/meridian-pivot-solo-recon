@@ -3,45 +3,32 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from inventory_service.api import create_server
 from inventory_service.cache import InventoryCache
-from inventory_service.poller import InventoryPoller
-from inventory_service.warehouse import WarehouseClient
+from inventory_service.webhook import WebhookProcessor
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Northstar inventory service.")
-    parser.add_argument(
-        "--warehouse-url",
-        default="http://127.0.0.1:9000/inventory",
-        help="Warehouse inventory endpoint.",
-    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument(
-        "--poll-interval",
-        type=float,
-        default=300,
-        help="Seconds between polls; production default is 300 seconds.",
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    cache = InventoryCache()
-    client = WarehouseClient(args.warehouse_url)
-    poller = InventoryPoller(
-        client,
-        cache,
-        interval_seconds=args.poll_interval,
-    )
-    server = create_server(cache, args.host, args.port)
+    webhook_secret = os.environ.get("NORTHSTAR_WEBHOOK_SECRET")
+    if not webhook_secret:
+        raise SystemExit("NORTHSTAR_WEBHOOK_SECRET environment variable is required")
 
-    poller.start()
+    cache = InventoryCache()
+    webhook_processor = WebhookProcessor(cache, webhook_secret)
+    server = create_server(cache, webhook_processor, args.host, args.port)
+
     print(f"Stock query API listening at http://{args.host}:{args.port}")
-    print(f"Polling {args.warehouse_url} every {args.poll_interval:g} seconds")
+    print(f"Inventory webhook listening at http://{args.host}:{args.port}/webhooks/inventory")
 
     try:
         server.serve_forever()
@@ -49,7 +36,6 @@ def main() -> None:
         print("Stopping inventory service")
     finally:
         server.shutdown()
-        poller.stop()
         server.server_close()
 
 
